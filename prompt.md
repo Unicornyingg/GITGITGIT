@@ -1,159 +1,223 @@
-Option B: Use Docker, recommended for simulation/dev
+Yes, you can run **Ubuntu 20.04 + ROS 2** using Docker on your Ubuntu 26.04 machine.
 
-Docker lets you run Ubuntu 20.04 inside your Ubuntu 26.04 system without replacing your OS. Docker’s official Ubuntu guide recommends installing Docker Engine through its apt repository.
+For Ubuntu 20.04, the ROS 2 version is **ROS 2 Foxy**. Just note that Foxy has reached end-of-life, so it is fine for compatibility/testing, but not ideal for a long-term production system. ([ROS Documentation][1])
 
-1. Install Docker on Ubuntu 26.04
+## 1. Install Docker on your Ubuntu 26.04 host
 
-Run this on your host machine:
+Run this on your normal Ubuntu 26.04 terminal:
 
+```bash
 sudo apt update
-sudo apt install -y ca-certificates curl gnupg
-
-Add Docker’s repository:
-
-sudo install -m 0755 -d /etc/apt/keyrings
-
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-Add the Docker source:
-
-echo \
-"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu \
-$(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-Install Docker:
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-Allow your user to run Docker:
-
+sudo apt install -y docker.io python3-pip pipx x11-xserver-utils
+sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
+```
 
 Then log out and log back in.
 
-Test:
+Test Docker:
 
+```bash
 docker run hello-world
-2. Pull a Ubuntu 20.04 ROS Noetic image
+```
 
-For ROS 1 Noetic:
+## 2. Install Rocker for GUI support
 
-docker pull osrf/ros:noetic-desktop-full
+Rocker helps Docker containers use GUI apps like **RViz2** and **Gazebo**. It is commonly used for ROS Docker workflows with X11, NVIDIA, user permissions, and mounted folders. ([GitHub][2])
 
-Then run it:
+```bash
+pipx ensurepath
+pipx install rocker
+```
 
-docker run -it --name ros-noetic-sim osrf/ros:noetic-desktop-full bash
+Close and reopen your terminal, then check:
 
-Inside the container, check:
+```bash
+rocker --help
+```
 
+## 3. Pull the ROS 2 Foxy Docker image
+
+Use the OSRF ROS image:
+
+```bash
+docker pull osrf/ros:foxy-desktop
+```
+
+The `foxy-desktop` image is based on ROS 2 Foxy desktop packages for Ubuntu 20.04/Focal. ([Docker Hub][3])
+
+## 4. Create a persistent workspace folder
+
+This folder stays on your Ubuntu 26.04 machine, but will be mounted inside the Ubuntu 20.04 ROS 2 container.
+
+```bash
+mkdir -p ~/drone_foxy_ws/src
+```
+
+## 5. Run the Ubuntu 20.04 + ROS 2 Foxy container
+
+```bash
+rocker --x11 --user --network=host --privileged \
+  --volume ~/drone_foxy_ws:/home/$USER/drone_foxy_ws \
+  osrf/ros:foxy-desktop
+```
+
+You are now inside a Docker container running ROS 2 Foxy.
+
+Check:
+
+```bash
 lsb_release -a
+```
 
 You should see Ubuntu 20.04.
 
-Check ROS:
+Check ROS 2:
 
-rosversion -d
+```bash
+echo $ROS_DISTRO
+```
 
 Expected:
 
-noetic
-3. Run GUI apps like RViz/Gazebo
+```text
+foxy
+```
 
-Normal Docker containers do not automatically show GUI windows. For robotics, use rocker, which is made to run ROS Docker containers with GUI support. Rocker supports X11, NVIDIA, CUDA, user mapping, home-directory mounting, and network options.
+## 6. Test ROS 2 inside the container
 
-Install rocker:
+In the container, run:
 
-sudo apt update
-sudo apt install -y python3-pip
-pip3 install rocker
+```bash
+ros2 run demo_nodes_cpp talker
+```
 
-Then run ROS Noetic with GUI support:
+Open another terminal on your host and enter the same container again:
 
-rocker --x11 --user --network=host --privileged osrf/ros:noetic-desktop-full
-
-Inside the container, test RViz:
-
-rviz
-
-If RViz opens, GUI forwarding works.
-
-If you have an NVIDIA GPU, use:
-
-rocker --x11 --nvidia --user --network=host --privileged osrf/ros:noetic-desktop-full
-4. Make your workspace persistent
-
-By default, files inside a Docker container can be lost if you delete the container. Create a workspace on your host:
-
-mkdir -p ~/drone20_ws
-
-Run the container with that folder mounted:
-
+```bash
 rocker --x11 --user --network=host --privileged \
-  --volume ~/drone20_ws:/home/$USER/drone20_ws \
-  osrf/ros:noetic-desktop-full
+  --volume ~/drone_foxy_ws:/home/$USER/drone_foxy_ws \
+  osrf/ros:foxy-desktop
+```
+
+Then run:
+
+```bash
+ros2 run demo_nodes_py listener
+```
+
+If the listener receives messages, ROS 2 is working.
+
+## 7. Test RViz2
 
 Inside the container:
 
-cd ~/drone20_ws
-mkdir -p catkin_ws/src
-cd catkin_ws
-catkin_make
+```bash
+rviz2
+```
 
-Source it:
+If RViz2 opens, your GUI setup is working.
 
-echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
-echo "source ~/drone20_ws/catkin_ws/devel/setup.bash" >> ~/.bashrc
+If it fails with a display error, run this on your host first:
+
+```bash
+xhost +local:docker
+```
+
+Then try launching the container again.
+
+## 8. Set up your ROS 2 workspace
+
+Inside the container:
+
+```bash
+cd ~/drone_foxy_ws
+colcon build
+source install/setup.bash
+```
+
+Add it to `.bashrc` inside the container:
+
+```bash
+echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc
+echo "source ~/drone_foxy_ws/install/setup.bash" >> ~/.bashrc
 source ~/.bashrc
-5. For PX4 simulation on Ubuntu 20.04
+```
 
-Inside your Ubuntu 20.04 container or VM:
+## 9. Create your first ROS 2 package
 
-cd ~
-git clone https://github.com/PX4/PX4-Autopilot.git --recursive
-cd PX4-Autopilot
-bash ./Tools/setup/ubuntu.sh
+Inside the container:
 
-Then restart the container or source your shell again.
+```bash
+cd ~/drone_foxy_ws/src
 
-For older PX4/Gazebo Classic workflows on 20.04, PX4’s docs note that the setup script installs Gazebo Classic 11 on Ubuntu 20.04.
+ros2 pkg create drone_perception \
+  --build-type ament_python \
+  --dependencies rclpy sensor_msgs std_msgs geometry_msgs cv_bridge
+```
 
-Try:
+Then build:
 
-make px4_sitl gazebo
+```bash
+cd ~/drone_foxy_ws
+colcon build
+source install/setup.bash
+```
 
-or depending on PX4 version:
+## 10. What to install next inside the container
 
-make px4_sitl_default gazebo
-My recommendation for you
+For your drone simulation work, install these inside the container:
 
-Use this setup:
+```bash
+sudo apt update
+sudo apt install -y \
+  python3-colcon-common-extensions \
+  python3-rosdep \
+  ros-foxy-rviz2 \
+  ros-foxy-image-transport \
+  ros-foxy-cv-bridge \
+  ros-foxy-pcl-ros \
+  ros-foxy-tf2-tools
+```
 
+For Python vision tools:
+
+```bash
+python3 -m pip install --upgrade pip
+python3 -m pip install opencv-python numpy ultralytics
+```
+
+## Important recommendation
+
+Since you are using ROS 2, the setup is:
+
+```text
 Ubuntu 26.04 host
-→ Docker + rocker
-→ Ubuntu 20.04 ROS Noetic container
-→ Gazebo/RViz/PX4 simulation
-→ Mount ~/drone20_ws so your files persist
+→ Docker + Rocker
+→ Ubuntu 20.04 container
+→ ROS 2 Foxy
+→ RViz2 / Gazebo / mapping / detection code
+```
 
-The fastest starting command after Docker is installed:
+For your project, start by getting these working in order:
 
-mkdir -p ~/drone20_ws
+```text
+1. ROS 2 talker/listener
+2. RViz2 opens
+3. Camera topic simulation
+4. YOLO detection node
+5. Mapping/SLAM node
+6. Drone simulation later
+```
 
+The command you will use most often is:
+
+```bash
 rocker --x11 --user --network=host --privileged \
-  --volume ~/drone20_ws:/home/$USER/drone20_ws \
-  osrf/ros:noetic-desktop-full
+  --volume ~/drone_foxy_ws:/home/$USER/drone_foxy_ws \
+  osrf/ros:foxy-desktop
+```
 
-Then inside the container:
-
-roscore
-
-Open another rocker terminal and test:
-
-rviz
-
-That gives you a working Ubuntu 20.04 ROS Noetic simulation environment without deleting Ubuntu 26.04.
+[1]: https://docs.ros.org/en/foxy/Installation.html?utm_source=chatgpt.com "Installation — ROS 2 Documentation: Foxy documentation"
+[2]: https://github.com/osrf/rocker?utm_source=chatgpt.com "osrf/rocker: A tool to run docker containers with overlays ..."
+[3]: https://hub.docker.com/r/osrf/ros/?utm_source=chatgpt.com "osrf/ros - Docker Image"
